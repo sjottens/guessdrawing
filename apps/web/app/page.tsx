@@ -14,7 +14,8 @@ export default function HomePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => setName(getStoredName()), []);
+  // Prefill the last used name, without overwriting anything typed already.
+  useEffect(() => setName((n) => n || getStoredName()), []);
 
   const cleanName = sanitizeName(name);
 

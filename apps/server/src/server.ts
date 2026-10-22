@@ -39,6 +39,9 @@ export function createGameServer(opts: GameServerOptions = {}): GameServer {
     cors: { origin: opts.corsOrigin ?? "*" },
     // Strokes can be sent in bursts; keep a sane upper limit per message.
     maxHttpBufferSize: 1e6,
+    // Notice dropped connections (e.g. a phone losing signal) within ~20s.
+    pingInterval: 10_000,
+    pingTimeout: 10_000,
   });
 
   const rooms = new RoomManager(io, { ...defaultRoomOptions, ...opts.room });
