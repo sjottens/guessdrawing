@@ -82,7 +82,7 @@ class GameClient {
   async createRoom(): Promise<Result<{ code: RoomCode }>> {
     try {
       const res = await fetch(`${serverUrl()}/rooms`, { method: "POST" });
-      if (!res.ok) return { ok: false, message: "Kon geen kamer maken" };
+      if (!res.ok) return { ok: false, message: `Kon geen kamer maken (fout ${res.status} van ${serverUrl()})` };
       const { code } = (await res.json()) as CreateRoomResponse;
       return { ok: true, data: { code } };
     } catch {
