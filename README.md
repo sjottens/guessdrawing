@@ -48,7 +48,7 @@ pnpm deploy:server  # server naar Cloudflare deployen (na `wrangler login`)
 | App | Variabele | Standaard | Uitleg |
 | --- | --- | --- | --- |
 | web | `NEXT_PUBLIC_SERVER_URL` | `http(s)://<host>:8787` | URL van de Cloudflare Worker |
-| server | `CORS_ORIGIN` (in `wrangler.jsonc`) | leeg = alles toegestaan | Toegestane origin(s), kommagescheiden, bv. `https://guessdrawing.vercel.app` |
+| server | `CORS_ORIGIN` (in `wrangler.jsonc` in de root) | leeg = alles toegestaan | Toegestane origin(s), kommagescheiden, bv. `https://guessdrawing.vercel.app` |
 
 ## Deployen
 
@@ -62,11 +62,11 @@ Maak een gratis account op [cloudflare.com](https://dash.cloudflare.com/sign-up)
 
 1. Ga naar *Workers & Pages → Create → Import a repository* en kies deze GitHub-repo.
 2. Vul in:
-   - *Project name*: `krabbel-server` (moet gelijk zijn aan `name` in `apps/server/wrangler.jsonc`)
-   - *Root directory*: leeg laten (de repo-root, daar staat `pnpm-lock.yaml`)
-   - *Build command*: leeg laten
-   - *Deploy command*: `pnpm run deploy:server`
-3. Deploy. Je server staat daarna op `https://krabbel-server.<jouw-subdomein>.workers.dev`. Elke push naar `main` deployt opnieuw.
+   - *Project name*: `guessdrawing` (moet gelijk zijn aan `name` in `wrangler.jsonc` in de root)
+   - *Root directory*: `/`
+   - *Build command*: `pnpm run build` (standaard) of leeg
+   - *Deploy command*: `npx wrangler deploy` (standaard)
+3. Deploy. Je server staat daarna op `https://guessdrawing.<jouw-subdomein>.workers.dev`. Elke push naar `main` deployt opnieuw.
 
 **Via de terminal**
 
@@ -76,7 +76,7 @@ pnpm --filter @guessdrawing/server exec wrangler login
 pnpm deploy:server
 ```
 
-Controleer of het werkt: `https://krabbel-server.<jouw-subdomein>.workers.dev/health` geeft `{"ok":true}`.
+Controleer of het werkt: `https://guessdrawing.<jouw-subdomein>.workers.dev/health` geeft `{"ok":true}`.
 
 ### 2. Web-app op Vercel
 
@@ -87,7 +87,7 @@ Controleer of het werkt: `https://krabbel-server.<jouw-subdomein>.workers.dev/he
 
 ### Gratis limieten
 
-Het gratis Cloudflare-plan geeft per dag 100.000 verzoeken (WebSocket-berichten tellen mee) en een beperkte hoeveelheid rekentijd voor Durable Objects. Een kamer kost alleen rekentijd zolang er spelers verbonden zijn. Voor een groep vrienden is dat ruim voldoende; de client bundelt tekenpunten per 60 ms om het aantal berichten laag te houden. Kijk in het Cloudflare-dashboard bij *Workers & Pages → krabbel-server → Metrics* hoeveel je gebruikt.
+Het gratis Cloudflare-plan geeft per dag 100.000 verzoeken (WebSocket-berichten tellen mee) en een beperkte hoeveelheid rekentijd voor Durable Objects. Een kamer kost alleen rekentijd zolang er spelers verbonden zijn. Voor een groep vrienden is dat ruim voldoende; de client bundelt tekenpunten per 60 ms om het aantal berichten laag te houden. Kijk in het Cloudflare-dashboard bij *Workers & Pages → guessdrawing → Metrics* hoeveel je gebruikt.
 
 > Een kamer leeft in het geheugen van zijn Durable Object. Na een nieuwe deploy van de server vervallen lopende spellen.
 
@@ -115,7 +115,6 @@ Elk tabblad heeft een geheim sessietoken (in `sessionStorage`). Valt de verbindi
 ```
 apps/
   server/
-    wrangler.jsonc   Cloudflare-configuratie (Worker + Durable Object)
     src/index.ts     Worker: routes (POST /rooms, WebSocket) + Durable Object per kamer
     src/game/room.ts     Kamer + spellogica (fases, timers, raden, punten)
     src/game/drawing.ts  Validatie en opslag van streken
@@ -126,6 +125,7 @@ apps/
     components/      Canvas, toolbar, chat, spelerslijst, overlays
     lib/             Socket-client/store, tekening-store, rendering
 packages/shared/src/ Gedeelde types, protocol en constanten
+wrangler.jsonc       Cloudflare-configuratie (Worker + Durable Object)
 ```
 
 Woorden toevoegen? Pas `apps/server/src/data/words.nl.json` aan.

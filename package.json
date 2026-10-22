@@ -7,9 +7,12 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "deploy:server": "pnpm --filter @guessdrawing/server run deploy"
+    "deploy:server": "wrangler deploy"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "wrangler": "^4.152.0"
   }
 }

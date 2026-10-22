@@ -1,7 +1,8 @@
 {
-  "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "krabbel-server",
-  "main": "src/index.ts",
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Must match the Worker name in the Cloudflare dashboard.
+  "name": "guessdrawing",
+  "main": "apps/server/src/index.ts",
   "compatibility_date": "2026-10-01",
   "observability": { "enabled": true },
   "durable_objects": {
