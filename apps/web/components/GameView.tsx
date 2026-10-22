@@ -3,6 +3,7 @@
 import type { RoomState } from "@guessdrawing/shared";
 import { getGameClient, type ClientSnapshot } from "@/lib/game-client";
 import { Chat } from "./Chat";
+import { DrawingBoard } from "./DrawingBoard";
 import { Lobby } from "./Lobby";
 import { Logo } from "./Logo";
 import { PlayerList } from "./PlayerList";
@@ -37,8 +38,11 @@ export function GameView({
       )}
 
       <div className="grid flex-1 grid-cols-1 gap-3 lg:grid-cols-[220px_1fr_280px]">
-        <section className="card order-1 min-h-[300px] overflow-hidden lg:order-2">
+        <section className="card order-1 self-start overflow-hidden lg:order-2">
           <Lobby room={room} />
+          <div className="p-2">
+            <DrawingBoard canDraw />
+          </div>
         </section>
         <aside className="order-3 lg:order-1">
           <PlayerList room={room} />

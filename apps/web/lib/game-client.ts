@@ -10,6 +10,7 @@ import type {
   RoomState,
   ServerToClientEvents,
 } from "@guessdrawing/shared";
+import { DrawingStore } from "./drawing-store";
 import { getSessionToken } from "./session";
 
 export type ClientSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -32,6 +33,7 @@ function serverUrl(): string {
 
 class GameClient {
   readonly socket: ClientSocket;
+  readonly drawing = new DrawingStore();
   private snapshot: ClientSnapshot = { connected: false, reconnecting: false, room: null, messages: [] };
   private readonly listeners = new Set<() => void>();
   /** The room we want to be in, so we can rejoin automatically after a reconnect. */
@@ -57,6 +59,11 @@ class GameClient {
     this.socket.on("room:state", (room) => {
       this.update({ room, reconnecting: false });
     });
+    this.socket.on("draw:sync", (strokes) => this.drawing.reset(strokes));
+    this.socket.on("draw:begin", (stroke) => this.drawing.begin(stroke));
+    this.socket.on("draw:points", ({ id, points }) => this.drawing.append(id, points));
+    this.socket.on("draw:remove", (id) => this.drawing.remove(id));
+    this.socket.on("draw:clear", () => this.drawing.clear());
     this.socket.on("chat:message", (message) => {
       const messages = [...this.snapshot.messages, message].slice(-MAX_MESSAGES);
       this.update({ messages });
@@ -79,7 +86,10 @@ class GameClient {
   join(code: RoomCode | undefined, name: string): Promise<Ack<{ code: RoomCode }>> {
     return new Promise((resolve) => {
       const switching = this.snapshot.room && this.snapshot.room.code !== code;
-      if (switching) this.update({ room: null, messages: [] });
+      if (switching) {
+        this.update({ room: null, messages: [] });
+        this.drawing.clear();
+      }
       this.socket
         .timeout(8000)
         .emit("room:join", { code, name, sessionToken: getSessionToken() }, (err, res) => {
@@ -97,6 +107,7 @@ class GameClient {
     this.target = null;
     this.socket.emit("room:leave");
     this.update({ room: null, messages: [], reconnecting: false });
+    this.drawing.clear();
   }
 
   sendChat(text: string): void {

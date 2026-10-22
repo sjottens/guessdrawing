@@ -3,13 +3,14 @@
 import { useState } from "react";
 import type { RoomState } from "@guessdrawing/shared";
 
+/** Compact bar shown above the canvas while waiting for players. */
 export function Lobby({ room }: { room: RoomState }) {
   const [copied, setCopied] = useState(false);
-  const link = typeof window !== "undefined" ? `${window.location.origin}/room/${room.code}` : "";
 
-  async function copy() {
+  async function share() {
+    const link = `${window.location.origin}/room/${room.code}`;
     try {
-      if (navigator.share && /Mobi/i.test(navigator.userAgent)) {
+      if (navigator.share && /Mobi|Android/i.test(navigator.userAgent)) {
         await navigator.share({ title: "Doe mee met Krabbel!", url: link });
         return;
       }
@@ -22,18 +23,17 @@ export function Lobby({ room }: { room: RoomState }) {
   }
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
-      <h2 className="text-2xl font-black text-indigo-900">Wachten op spelers…</h2>
-      <p className="text-slate-500">
-        Deel de code <span className="font-mono text-xl font-black tracking-widest text-indigo-700">{room.code}</span> of
-        de link met je vrienden.
-      </p>
-      <button className="btn-secondary" onClick={copy}>
-        {copied ? "Gekopieerd ✓" : "Uitnodigingslink delen"}
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 p-3">
+      <div>
+        <h2 className="font-black text-indigo-900">Wachten op spelers… ({room.players.length}/{room.maxPlayers})</h2>
+        <p className="text-sm text-slate-500">
+          Code <span className="font-mono font-black tracking-widest text-indigo-700">{room.code}</span> · teken alvast
+          wat!
+        </p>
+      </div>
+      <button className="btn-secondary py-2 text-sm" onClick={share}>
+        {copied ? "Gekopieerd ✓" : "Link delen"}
       </button>
-      <p className="text-sm text-slate-400">
-        {room.players.length}/{room.maxPlayers} spelers
-      </p>
     </div>
   );
 }

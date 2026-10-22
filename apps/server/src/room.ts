@@ -4,10 +4,12 @@ import {
   RECONNECT_GRACE_MS,
   type ChatMessage,
   type PlayerId,
+  type Point,
   type PlayerInfo,
   type RoomCode,
   type RoomState,
 } from "@guessdrawing/shared";
+import { Drawing, parsePoints, parseStroke } from "./drawing.js";
 import type { GameSocket, IO } from "./types.js";
 
 export interface Player {
@@ -35,6 +37,7 @@ export type JoinResult =
 export class Room {
   readonly players = new Map<PlayerId, Player>();
   hostId: PlayerId | null = null;
+  readonly drawing = new Drawing();
 
   constructor(
     readonly code: RoomCode,
@@ -95,6 +98,7 @@ export class Room {
     socket.data.roomCode = this.code;
     socket.data.playerId = player.id;
     void socket.join(this.code);
+    socket.emit("draw:sync", this.drawing.snapshot());
   }
 
   /** Socket dropped: keep the seat for a while so the player can come back. */
@@ -153,6 +157,54 @@ export class Room {
 
   dispose(): void {
     for (const p of this.players.values()) if (p.disconnectTimer) clearTimeout(p.disconnectTimer);
+  }
+
+  // ---- Drawing ----
+
+  /** Who may draw right now. In the lobby everyone can doodle. */
+  protected canDraw(_player: Player): boolean {
+    return true;
+  }
+
+  /** Who may wipe the whole canvas. */
+  protected canClear(player: Player): boolean {
+    return this.canDraw(player);
+  }
+
+  handleDrawBegin(socket: GameSocket, raw: unknown): void {
+    const player = this.playerForSocket(socket);
+    if (!player || !this.canDraw(player)) return;
+    const stroke = parseStroke(raw);
+    if (!stroke || !this.drawing.begin(player.id, stroke)) return;
+    socket.to(this.code).emit("draw:begin", stroke);
+  }
+
+  handleDrawPoints(socket: GameSocket, raw: unknown): void {
+    const player = this.playerForSocket(socket);
+    if (!player || !this.canDraw(player) || !raw || typeof raw !== "object") return;
+    const { id, points: rawPoints } = raw as { id?: unknown; points?: unknown };
+    if (typeof id !== "string") return;
+    const points: Point[] | null = parsePoints(rawPoints);
+    if (!points || points.length === 0 || !this.drawing.append(player.id, id, points)) return;
+    socket.to(this.code).emit("draw:points", { id, points });
+  }
+
+  handleUndo(socket: GameSocket): void {
+    const player = this.playerForSocket(socket);
+    if (!player || !this.canDraw(player)) return;
+    const id = this.drawing.undo(player.id);
+    if (id) this.io.to(this.code).emit("draw:remove", id);
+  }
+
+  handleClear(socket: GameSocket): void {
+    const player = this.playerForSocket(socket);
+    if (!player || !this.canClear(player)) return;
+    this.clearDrawing();
+  }
+
+  clearDrawing(): void {
+    this.drawing.clear();
+    this.io.to(this.code).emit("draw:clear");
   }
 
   // ---- Chat ----

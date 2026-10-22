@@ -1,3 +1,4 @@
+import type { Point, Stroke } from "./drawing";
 import type { ChatMessage, RoomCode, RoomState } from "./types";
 
 export type ErrorCode =
@@ -23,9 +24,24 @@ export interface ClientToServerEvents {
   "room:join": (payload: JoinPayload, ack: (res: Ack<{ code: RoomCode }>) => void) => void;
   "room:leave": () => void;
   "chat:send": (text: string) => void;
+
+  /** Start a new stroke (may already contain the first points). */
+  "draw:begin": (stroke: Stroke) => void;
+  /** Append points to a stroke started with draw:begin. */
+  "draw:points": (payload: { id: string; points: Point[] }) => void;
+  /** Remove your most recent stroke. */
+  "draw:undo": () => void;
+  "draw:clear": () => void;
 }
 
 export interface ServerToClientEvents {
   "room:state": (state: RoomState) => void;
   "chat:message": (message: ChatMessage) => void;
+
+  "draw:begin": (stroke: Stroke) => void;
+  "draw:points": (payload: { id: string; points: Point[] }) => void;
+  "draw:remove": (strokeId: string) => void;
+  "draw:clear": () => void;
+  /** Full drawing, sent on (re)join so late joiners see the current picture. */
+  "draw:sync": (strokes: Stroke[]) => void;
 }

@@ -83,6 +83,11 @@ export function createGameServer(opts: GameServerOptions = {}): GameServer {
       roomOf(socket)?.handleChat(socket, clean);
     });
 
+    socket.on("draw:begin", (stroke) => roomOf(socket)?.handleDrawBegin(socket, stroke));
+    socket.on("draw:points", (payload) => roomOf(socket)?.handleDrawPoints(socket, payload));
+    socket.on("draw:undo", () => roomOf(socket)?.handleUndo(socket));
+    socket.on("draw:clear", () => roomOf(socket)?.handleClear(socket));
+
     socket.on("disconnect", () => roomOf(socket)?.handleDisconnect(socket));
   });
 
