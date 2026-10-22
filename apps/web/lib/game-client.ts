@@ -28,7 +28,12 @@ const JOIN_TIMEOUT_MS = 8_000;
 const MAX_RECONNECT_DELAY_MS = 5_000;
 
 function serverUrl(): string {
-  if (process.env.NEXT_PUBLIC_SERVER_URL) return process.env.NEXT_PUBLIC_SERVER_URL.replace(/\/$/, "");
+  const configured = process.env.NEXT_PUBLIC_SERVER_URL?.trim();
+  if (configured) {
+    // Be forgiving: "guessdrawing.x.workers.dev", a trailing slash or "/health" all work.
+    const withScheme = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
+    return withScheme.replace(/\/health\/?$/i, "").replace(/\/+$/, "");
+  }
   // Local development: the worker runs on port 8787 of the same host (also works from a phone on your network).
   return `${window.location.protocol}//${window.location.hostname}:8787`;
 }
