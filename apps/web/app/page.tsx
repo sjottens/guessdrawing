@@ -24,7 +24,7 @@ export default function HomePage() {
     setBusy(true);
     setError(null);
     storeName(cleanName);
-    const res = await getGameClient().join(undefined, cleanName);
+    const res = await getGameClient().createRoom();
     if (res.ok) router.push(`/room/${res.data.code}`);
     else {
       setError(res.message);

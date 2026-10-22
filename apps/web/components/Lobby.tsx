@@ -44,7 +44,7 @@ export function Lobby({ room }: { room: RoomState }) {
             className="btn-primary py-2 text-sm"
             disabled={!canStart}
             title={canStart ? undefined : "Je hebt minstens 2 spelers nodig"}
-            onClick={() => getGameClient().socket.emit("game:start")}
+            onClick={() => getGameClient().send({ type: "start" })}
           >
             Start spel
           </button>

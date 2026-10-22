@@ -1,74 +1,69 @@
 "use client";
 
-import { io, type Socket } from "socket.io-client";
 import { useSyncExternalStore } from "react";
-import type {
-  Ack,
-  ChatMessage,
-  ClientToServerEvents,
-  RoomCode,
-  RoomState,
-  ServerToClientEvents,
+import {
+  CONNECTION_TIMEOUT_MS,
+  PING_INTERVAL_MS,
+  type ChatMessage,
+  type ClientMessage,
+  type CreateRoomResponse,
+  type RoomCode,
+  type RoomState,
+  type ServerMessage,
 } from "@guessdrawing/shared";
 import { DrawingStore } from "./drawing-store";
 import { getSessionToken } from "./session";
 
-export type ClientSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
-
 export interface ClientSnapshot {
-  connected: boolean;
   /** True once we lost the connection while in a room. */
   reconnecting: boolean;
   room: RoomState | null;
   messages: ChatMessage[];
 }
 
+export type Result<T = undefined> = { ok: true; data: T } | { ok: false; message: string };
+
 const MAX_MESSAGES = 150;
+const JOIN_TIMEOUT_MS = 8_000;
+const MAX_RECONNECT_DELAY_MS = 5_000;
 
 function serverUrl(): string {
-  if (process.env.NEXT_PUBLIC_SERVER_URL) return process.env.NEXT_PUBLIC_SERVER_URL;
-  // Handy for testing on a phone in the same network.
-  return `${window.location.protocol}//${window.location.hostname}:4000`;
+  if (process.env.NEXT_PUBLIC_SERVER_URL) return process.env.NEXT_PUBLIC_SERVER_URL.replace(/\/$/, "");
+  // Local development: the worker runs on port 8787 of the same host (also works from a phone on your network).
+  return `${window.location.protocol}//${window.location.hostname}:8787`;
+}
+
+function socketUrl(code: RoomCode, name: string): string {
+  const base = serverUrl().replace(/^http/, "ws");
+  const params = new URLSearchParams({ name, token: getSessionToken() });
+  return `${base}/rooms/${encodeURIComponent(code)}/ws?${params}`;
 }
 
 class GameClient {
-  readonly socket: ClientSocket;
   readonly drawing = new DrawingStore();
-  private snapshot: ClientSnapshot = { connected: false, reconnecting: false, room: null, messages: [] };
+  private snapshot: ClientSnapshot = { reconnecting: false, room: null, messages: [] };
   private readonly listeners = new Set<() => void>();
+
+  private ws: WebSocket | null = null;
   /** The room we want to be in, so we can rejoin automatically after a reconnect. */
   private target: { code: RoomCode; name: string } | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private lastMessageAt = 0;
+  /** Whether we've been in the target room; only then do we retry on our own. */
+  private joinedTarget = false;
 
   constructor() {
-    this.socket = io(serverUrl(), { autoConnect: true, transports: ["websocket", "polling"] });
-
-    this.socket.on("connect", () => {
-      this.update({ connected: true });
-      if (this.target) {
-        void this.join(this.target.code, this.target.name).then((res) => {
-          if (!res.ok) {
-            this.target = null;
-            this.update({ room: null, reconnecting: false });
-          }
-        });
-      }
-    });
-    this.socket.on("disconnect", () => {
-      this.update({ connected: false, reconnecting: this.target !== null });
-    });
-    this.socket.on("room:state", (room) => {
-      this.update({ room, reconnecting: false });
-    });
-    this.socket.on("draw:sync", (strokes) => this.drawing.reset(strokes));
-    this.socket.on("draw:begin", (stroke) => this.drawing.begin(stroke));
-    this.socket.on("draw:points", ({ id, points }) => this.drawing.append(id, points));
-    this.socket.on("draw:remove", (id) => this.drawing.remove(id));
-    this.socket.on("draw:clear", () => this.drawing.clear());
-    this.socket.on("chat:message", (message) => {
-      const messages = [...this.snapshot.messages, message].slice(-MAX_MESSAGES);
-      this.update({ messages });
-    });
+    // Phones suspend background tabs; reconnect right away when the player comes back.
+    const wake = () => {
+      if (document.visibilityState === "visible") this.ensureConnected();
+    };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("online", () => this.ensureConnected());
   }
+
+  // ---- store for React ----
 
   private update(patch: Partial<ClientSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...patch };
@@ -82,36 +77,184 @@ class GameClient {
 
   getSnapshot = (): ClientSnapshot => this.snapshot;
 
-  /** Join a room by code, or create a new one when no code is given. */
-  join(code: RoomCode | undefined, name: string): Promise<Ack<{ code: RoomCode }>> {
-    return new Promise((resolve) => {
-      const switching = this.snapshot.room && this.snapshot.room.code !== code;
-      if (switching) {
-        this.update({ room: null, messages: [] });
-        this.drawing.clear();
-      }
-      this.socket
-        .timeout(8000)
-        .emit("room:join", { code, name, sessionToken: getSessionToken() }, (err, res) => {
-          if (err) {
-            resolve({ ok: false, error: "NOT_ALLOWED", message: "Server reageert niet" });
-            return;
-          }
-          if (res.ok) this.target = { code: res.data.code, name };
-          resolve(res);
-        });
-    });
+  // ---- rooms ----
+
+  async createRoom(): Promise<Result<{ code: RoomCode }>> {
+    try {
+      const res = await fetch(`${serverUrl()}/rooms`, { method: "POST" });
+      if (!res.ok) return { ok: false, message: "Kon geen kamer maken" };
+      const { code } = (await res.json()) as CreateRoomResponse;
+      return { ok: true, data: { code } };
+    } catch {
+      return { ok: false, message: "Server is niet bereikbaar" };
+    }
+  }
+
+  /** Connects to a room. Resolves once the server accepted (or refused) us. */
+  join(code: RoomCode, name: string): Promise<Result> {
+    if (this.snapshot.room && this.snapshot.room.code !== code) {
+      this.update({ room: null, messages: [] });
+      this.drawing.clear();
+    }
+    this.target = { code, name };
+    this.joinedTarget = false;
+    this.reconnectAttempts = 0;
+    return this.open();
   }
 
   leave(): void {
     this.target = null;
-    this.socket.emit("room:leave");
+    this.send({ type: "leave" });
+    this.closeSocket();
     this.update({ room: null, messages: [], reconnecting: false });
     this.drawing.clear();
   }
 
+  send(message: ClientMessage): void {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
+  }
+
   sendChat(text: string): void {
-    this.socket.emit("chat:send", text);
+    this.send({ type: "chat", text });
+  }
+
+  // ---- connection handling ----
+
+  private open(): Promise<Result> {
+    const target = this.target;
+    if (!target) return Promise.resolve({ ok: false, message: "Geen kamer" });
+    this.closeSocket();
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (r: Result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(r);
+      };
+      const timeout = setTimeout(() => {
+        settle({ ok: false, message: "Server reageert niet" });
+        ws.close();
+      }, JOIN_TIMEOUT_MS);
+
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(socketUrl(target.code, target.name));
+      } catch {
+        settle({ ok: false, message: "Server is niet bereikbaar" });
+        return;
+      }
+      this.ws = ws;
+      let refused = false;
+
+      ws.onopen = () => {
+        this.lastMessageAt = Date.now();
+        this.startPing();
+      };
+
+      ws.onmessage = (event) => {
+        if (this.ws !== ws) return;
+        this.lastMessageAt = Date.now();
+        let msg: ServerMessage;
+        try {
+          msg = JSON.parse(event.data as string) as ServerMessage;
+        } catch {
+          return;
+        }
+        if (msg.type === "error") {
+          // The room is gone or full: stop trying.
+          refused = true;
+          this.target = null;
+          this.update({ room: null, reconnecting: false });
+          settle({ ok: false, message: msg.message });
+          return;
+        }
+        if (msg.type === "state") {
+          this.reconnectAttempts = 0;
+          this.joinedTarget = true;
+          settle({ ok: true, data: undefined });
+        }
+        this.handle(msg);
+      };
+
+      ws.onclose = () => {
+        if (this.ws !== ws) return;
+        this.ws = null;
+        this.stopPing();
+        settle({ ok: false, message: "Verbinding mislukt" });
+        if (!refused && this.target && this.joinedTarget) this.scheduleReconnect();
+        else if (!this.joinedTarget) this.target = null;
+      };
+    });
+  }
+
+  private handle(msg: ServerMessage): void {
+    switch (msg.type) {
+      case "state":
+        return this.update({ room: msg.state, reconnecting: false });
+      case "chat":
+        return this.update({ messages: [...this.snapshot.messages, msg.message].slice(-MAX_MESSAGES) });
+      case "draw:sync":
+        return this.drawing.reset(msg.strokes);
+      case "draw:begin":
+        return this.drawing.begin(msg.stroke);
+      case "draw:points":
+        return this.drawing.append(msg.id, msg.points);
+      case "draw:remove":
+        return this.drawing.remove(msg.id);
+      case "draw:clear":
+        return this.drawing.clear();
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
+    this.update({ reconnecting: true });
+    const delay = Math.min(MAX_RECONNECT_DELAY_MS, 500 * 2 ** this.reconnectAttempts);
+    this.reconnectAttempts++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.open();
+    }, delay);
+  }
+
+  /** Reconnect now if we should be in a room but aren't connected. */
+  private ensureConnected(): void {
+    if (!this.target || !this.joinedTarget) return;
+    const state = this.ws?.readyState;
+    if (state === WebSocket.OPEN && Date.now() - this.lastMessageAt < CONNECTION_TIMEOUT_MS) return;
+    if (state === WebSocket.CONNECTING) return;
+    this.reconnectAttempts = 0;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    void this.open();
+  }
+
+  private startPing(): void {
+    this.stopPing();
+    this.pingTimer = setInterval(() => {
+      // No sign of life from the server for a while: assume the line is dead.
+      if (Date.now() - this.lastMessageAt > CONNECTION_TIMEOUT_MS) {
+        this.ws?.close();
+        return;
+      }
+      this.send({ type: "ping" });
+    }, PING_INTERVAL_MS);
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = null;
+  }
+
+  private closeSocket(): void {
+    const ws = this.ws;
+    this.ws = null;
+    this.stopPing();
+    if (ws && ws.readyState <= WebSocket.OPEN) ws.close(1000);
   }
 }
 
@@ -123,7 +266,7 @@ export function getGameClient(): GameClient {
   return client;
 }
 
-const serverSnapshot: ClientSnapshot = { connected: false, reconnecting: false, room: null, messages: [] };
+const serverSnapshot: ClientSnapshot = { reconnecting: false, room: null, messages: [] };
 
 export function useGameClient(): ClientSnapshot {
   return useSyncExternalStore(

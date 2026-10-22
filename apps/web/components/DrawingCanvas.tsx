@@ -5,7 +5,8 @@ import { CANVAS_ASPECT, type DrawTool, type Point, type Stroke } from "@guessdra
 import { getGameClient } from "@/lib/game-client";
 import { renderAll, renderStroke } from "@/lib/render";
 
-const SEND_INTERVAL_MS = 35;
+// Bundling points keeps the number of WebSocket messages (and the free-tier usage) low.
+const SEND_INTERVAL_MS = 60;
 /** Skip points closer than this to the previous one (normalised units). */
 const MIN_POINT_DISTANCE = 0.0015;
 
@@ -84,7 +85,7 @@ export function DrawingCanvas({ canDraw, brush }: { canDraw: boolean; brush: Bru
       if (flushTimer) clearTimeout(flushTimer);
       flushTimer = null;
       if (!current || pending.length === 0) return;
-      client.socket.emit("draw:points", { id: current.id, points: pending });
+      client.send({ type: "draw:points", id: current.id, points: pending });
       pending = [];
     };
 
@@ -107,7 +108,7 @@ export function DrawingCanvas({ canDraw, brush }: { canDraw: boolean; brush: Bru
       const { tool, color, size } = brushRef.current;
       current = { id: newStrokeId(), tool, color, size, points: [toPoint(e)] };
       store.begin(current);
-      client.socket.emit("draw:begin", current);
+      client.send({ type: "draw:begin", stroke: current });
     };
 
     const onMove = (e: PointerEvent) => {

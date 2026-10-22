@@ -5,9 +5,9 @@
   "scripts": {
     "dev": "pnpm --parallel --filter \"./apps/*\" dev",
     "build": "pnpm -r build",
-    "start": "pnpm --filter @guessdrawing/server start",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "deploy:server": "pnpm --filter @guessdrawing/server run deploy"
   },
   "engines": {
     "node": ">=20"

@@ -4,5 +4,6 @@ packages:
 
 onlyBuiltDependencies:
   - esbuild
+  - workerd
   - sharp
   - "@tailwindcss/oxide"

@@ -21,7 +21,7 @@ export function WordChoice({ room }: { room: RoomState }) {
           <button
             key={w}
             className="btn rounded-xl bg-white px-5 py-3 text-lg text-indigo-900 shadow-lg hover:bg-amber-100"
-            onClick={() => getGameClient().socket.emit("game:choose", i)}
+            onClick={() => getGameClient().send({ type: "choose", index: i })}
           >
             {w}
           </button>
@@ -82,7 +82,7 @@ export function Scoreboard({ room }: { room: RoomState }) {
         ))}
       </ol>
       {isHost ? (
-        <button className="btn-primary mt-4" onClick={() => getGameClient().socket.emit("game:reset")}>
+        <button className="btn-primary mt-4" onClick={() => getGameClient().send({ type: "reset" })}>
           Nog een keer spelen
         </button>
       ) : (

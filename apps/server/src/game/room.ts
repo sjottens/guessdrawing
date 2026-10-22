@@ -1,8 +1,8 @@
-import { randomInt, randomUUID } from "node:crypto";
 import {
   CHOOSE_WORD_MS,
   DRAWER_AWAY_MS,
   DRAW_TIME_MS,
+  MAX_CHAT_LENGTH,
   MAX_PLAYERS,
   MIN_PLAYERS_TO_START,
   RECONNECT_GRACE_MS,
@@ -11,19 +11,29 @@ import {
   WORD_CHOICES,
   levenshtein,
   normalizeGuess,
+  sanitizeName,
   type ChatMessage,
+  type ErrorCode,
   type GamePhase,
   type PlayerId,
   type PlayerInfo,
-  type Point,
   type RoomCode,
   type RoomState,
+  type ServerMessage,
   type TurnEndReason,
 } from "@guessdrawing/shared";
 import { Drawing, parsePoints, parseStroke } from "./drawing.js";
+import { randomId, randomInt } from "./random.js";
 import { drawerPoints, guessPoints } from "./scoring.js";
-import type { GameSocket, IO } from "./types.js";
 import { WORDS, hintCount, letterIndexes, maskWord, pickWords } from "./words.js";
+
+/** One client connection. The room doesn't care whether it's a WebSocket or a test double. */
+export interface Connection {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+}
+
+type Timer = ReturnType<typeof setTimeout>;
 
 export interface Player {
   id: PlayerId;
@@ -31,8 +41,8 @@ export interface Player {
   /** Secret token from the client; lets a player reclaim their seat. */
   token: string;
   score: number;
-  socketId: string | null;
-  disconnectTimer: NodeJS.Timeout | null;
+  conn: Connection | null;
+  disconnectTimer: Timer | null;
 }
 
 export interface RoomOptions {
@@ -55,8 +65,6 @@ export const defaultRoomOptions: RoomOptions = {
   words: WORDS,
 };
 
-export type JoinResult = { ok: true; player: Player; rejoined: boolean } | { ok: false; error: "ROOM_FULL" };
-
 /** Everything that belongs to a single drawing turn. */
 interface Turn {
   drawerId: PlayerId;
@@ -69,8 +77,20 @@ interface Turn {
   endReason: TurnEndReason | null;
 }
 
+const errorText: Record<ErrorCode, string> = {
+  ROOM_NOT_FOUND: "Deze kamer bestaat niet (meer)",
+  ROOM_FULL: "Deze kamer zit vol",
+  INVALID_NAME: "Kies eerst een naam",
+  NOT_ALLOWED: "Ongeldige sessie",
+};
+
+export function errorMessage(error: ErrorCode): string {
+  return JSON.stringify({ type: "error", error, message: errorText[error] } satisfies ServerMessage);
+}
+
 export class Room {
   readonly players = new Map<PlayerId, Player>();
+  private readonly connections = new Map<Connection, PlayerId>();
   hostId: PlayerId | null = null;
   readonly drawing = new Drawing();
 
@@ -82,18 +102,17 @@ export class Room {
   private usedWords = new Set<string>();
 
   /** The one timer that ends the current phase. */
-  private phaseTimer: NodeJS.Timeout | null = null;
+  private phaseTimer: Timer | null = null;
   private phaseEndsAt: number | null = null;
   private phaseDurationMs: number | null = null;
-  private hintTimers: NodeJS.Timeout[] = [];
-  private drawerAwayTimer: NodeJS.Timeout | null = null;
+  private hintTimers: Timer[] = [];
+  private drawerAwayTimer: Timer | null = null;
 
   constructor(
     readonly code: RoomCode,
-    protected readonly io: IO,
-    protected readonly options: RoomOptions,
-    /** Called when the last player is gone, so the manager can drop the room. */
-    private readonly onEmpty: (room: Room) => void,
+    private readonly options: RoomOptions = defaultRoomOptions,
+    /** Called when the last player is gone. */
+    private readonly onEmpty: (room: Room) => void = () => {},
   ) {}
 
   get isEmpty(): boolean {
@@ -104,67 +123,64 @@ export class Room {
     return this.phase === "choosing" || this.phase === "drawing" || this.phase === "turnEnd";
   }
 
-  findByToken(token: string): Player | undefined {
-    for (const p of this.players.values()) if (p.token === token) return p;
-    return undefined;
-  }
-
   // =========================================================================
-  // Joining, leaving, reconnecting
+  // Connecting, leaving, reconnecting
   // =========================================================================
 
-  join(socket: GameSocket, name: string, token: string): JoinResult {
-    const existing = this.findByToken(token);
+  /** A new connection wants to join. Returns false (and closes it) when refused. */
+  connect(conn: Connection, rawName: unknown, rawToken: unknown): boolean {
+    const name = sanitizeName(rawName);
+    const token = typeof rawToken === "string" ? rawToken.slice(0, 100) : "";
+    if (!name) return this.refuse(conn, "INVALID_NAME");
+    if (!token) return this.refuse(conn, "NOT_ALLOWED");
+
+    const existing = [...this.players.values()].find((p) => p.token === token);
     if (existing) {
-      // Reconnect (or second join from the same tab): take over the seat.
-      if (existing.socketId && existing.socketId !== socket.id) {
-        this.io.sockets.sockets.get(existing.socketId)?.leave(this.code);
+      // Reconnect (or the same tab again): take over the seat.
+      if (existing.conn && existing.conn !== conn) {
+        this.connections.delete(existing.conn);
+        existing.conn.close(4000, "Replaced by a newer connection");
       }
       if (existing.disconnectTimer) clearTimeout(existing.disconnectTimer);
       existing.disconnectTimer = null;
-      const wasDisconnected = existing.socketId === null;
-      existing.socketId = socket.id;
+      const wasDisconnected = existing.conn === null;
+      existing.conn = conn;
       existing.name = name;
-      this.attachSocket(socket, existing);
+      this.connections.set(conn, existing.id);
+      this.sendTo(existing, { type: "draw:sync", strokes: this.drawing.snapshot() });
       if (wasDisconnected) this.systemMessage(`${existing.name} is terug`);
       if (this.turn?.drawerId === existing.id && this.drawerAwayTimer) {
         clearTimeout(this.drawerAwayTimer);
         this.drawerAwayTimer = null;
       }
       this.broadcastState();
-      return { ok: true, player: existing, rejoined: true };
+      return true;
     }
 
-    if (this.players.size >= MAX_PLAYERS) return { ok: false, error: "ROOM_FULL" };
+    if (this.players.size >= MAX_PLAYERS) return this.refuse(conn, "ROOM_FULL");
 
-    const player: Player = {
-      id: randomUUID(),
-      name,
-      token,
-      score: 0,
-      socketId: socket.id,
-      disconnectTimer: null,
-    };
+    const player: Player = { id: randomId(), name, token, score: 0, conn, disconnectTimer: null };
     this.players.set(player.id, player);
+    this.connections.set(conn, player.id);
     if (!this.hostId) this.hostId = player.id;
-    this.attachSocket(socket, player);
+    this.sendTo(player, { type: "draw:sync", strokes: this.drawing.snapshot() });
     this.systemMessage(`${player.name} doet mee`);
     this.broadcastState();
-    return { ok: true, player, rejoined: false };
+    return true;
   }
 
-  private attachSocket(socket: GameSocket, player: Player): void {
-    socket.data.roomCode = this.code;
-    socket.data.playerId = player.id;
-    void socket.join(this.code);
-    socket.emit("draw:sync", this.drawing.snapshot());
+  private refuse(conn: Connection, error: ErrorCode): false {
+    conn.send(errorMessage(error));
+    conn.close(4001, error);
+    return false;
   }
 
-  /** Socket dropped: keep the seat for a while so the player can come back. */
-  handleDisconnect(socket: GameSocket): void {
-    const player = this.playerForSocket(socket);
+  /** Connection dropped: keep the seat for a while so the player can come back. */
+  handleClose(conn: Connection): void {
+    const player = this.playerFor(conn);
+    this.connections.delete(conn);
     if (!player) return;
-    player.socketId = null;
+    player.conn = null;
     player.disconnectTimer = setTimeout(() => this.removePlayer(player.id), this.options.reconnectGraceMs);
     this.armDrawerAwayTimer();
     this.broadcastState();
@@ -173,7 +189,7 @@ export class Room {
   /** If the drawer is offline, skip their turn unless they come back soon. */
   private armDrawerAwayTimer(): void {
     const drawer = this.turn ? this.players.get(this.turn.drawerId) : undefined;
-    if (!drawer || drawer.socketId || this.drawerAwayTimer) return;
+    if (!drawer || drawer.conn || this.drawerAwayTimer) return;
     if (this.phase !== "choosing" && this.phase !== "drawing") return;
     this.drawerAwayTimer = setTimeout(() => {
       this.drawerAwayTimer = null;
@@ -183,20 +199,20 @@ export class Room {
   }
 
   /** Player chose to leave: remove immediately. */
-  leave(socket: GameSocket): void {
-    const player = this.playerForSocket(socket);
-    if (!player) return;
-    void socket.leave(this.code);
-    socket.data.roomCode = undefined;
-    socket.data.playerId = undefined;
+  private leave(player: Player): void {
+    const conn = player.conn;
+    if (conn) {
+      this.connections.delete(conn);
+      player.conn = null;
+      conn.close(1000, "Left the room");
+    }
     this.removePlayer(player.id);
   }
 
-  playerForSocket(socket: GameSocket): Player | undefined {
-    const id = socket.data.playerId;
-    if (!id || socket.data.roomCode !== this.code) return undefined;
-    const player = this.players.get(id);
-    return player && player.socketId === socket.id ? player : undefined;
+  private playerFor(conn: Connection): Player | undefined {
+    const id = this.connections.get(conn);
+    const player = id ? this.players.get(id) : undefined;
+    return player && player.conn === conn ? player : undefined;
   }
 
   removePlayer(id: PlayerId): void {
@@ -213,7 +229,7 @@ export class Room {
     this.systemMessage(`${player.name} heeft de kamer verlaten`);
     if (this.hostId === id) {
       // Prefer a connected player as the new host.
-      const next = [...this.players.values()].find((p) => p.socketId) ?? this.players.values().next().value!;
+      const next = [...this.players.values()].find((p) => p.conn) ?? this.players.values().next().value!;
       this.hostId = next.id;
       this.systemMessage(`${next.name} is nu de host`);
     }
@@ -240,13 +256,46 @@ export class Room {
   }
 
   // =========================================================================
+  // Incoming messages
+  // =========================================================================
+
+  /** Handles one (untrusted) message from a client. */
+  handleMessage(conn: Connection, raw: unknown): void {
+    const player = this.playerFor(conn);
+    if (!player || !raw || typeof raw !== "object") return;
+    const msg = raw as Record<string, unknown>;
+    switch (msg.type) {
+      case "ping":
+        conn.send(JSON.stringify({ type: "pong" } satisfies ServerMessage));
+        return;
+      case "chat":
+        return this.handleChat(player, msg.text);
+      case "start":
+        return void this.startGame(player);
+      case "choose":
+        return this.handleChoose(player, msg.index);
+      case "reset":
+        return this.resetGame(player);
+      case "draw:begin":
+        return this.handleDrawBegin(player, msg.stroke);
+      case "draw:points":
+        return this.handleDrawPoints(player, msg.id, msg.points);
+      case "draw:undo":
+        return this.handleUndo(player);
+      case "draw:clear":
+        return this.handleClear(player);
+      case "leave":
+        return this.leave(player);
+    }
+  }
+
+  // =========================================================================
   // Game flow: lobby -> (choosing -> drawing -> turnEnd)* -> gameEnd
   // =========================================================================
 
-  startGame(socket: GameSocket): boolean {
-    const player = this.playerForSocket(socket);
-    if (!player || player.id !== this.hostId || this.phase !== "lobby") return false;
-    const connected = [...this.players.values()].filter((p) => p.socketId).length;
+  private startGame(player: Player): boolean {
+    if (player.id !== this.hostId || this.phase !== "lobby") return false;
+    const connected = [...this.players.values()].filter((p) => p.conn).length;
     if (connected < MIN_PLAYERS_TO_START) return false;
 
     for (const p of this.players.values()) p.score = 0;
@@ -259,9 +308,8 @@ export class Room {
   }
 
   /** Host: back to the lobby after the scoreboard. */
-  resetGame(socket: GameSocket): void {
-    const player = this.playerForSocket(socket);
-    if (!player || player.id !== this.hostId || this.phase !== "gameEnd") return;
+  private resetGame(player: Player): void {
+    if (player.id !== this.hostId || this.phase !== "gameEnd") return;
     this.toLobby();
   }
 
@@ -278,13 +326,13 @@ export class Room {
   private nextTurn(): void {
     // The next player in join order who hasn't drawn yet this round.
     // Players who join mid-round simply get a turn later in the round.
-    let drawer = [...this.players.values()].find((p) => !this.drawnThisRound.has(p.id) && p.socketId);
+    let drawer = [...this.players.values()].find((p) => !this.drawnThisRound.has(p.id) && p.conn);
     if (!drawer) {
       this.round++;
       this.drawnThisRound.clear();
       if (this.round > this.options.rounds) return this.endGame();
       this.systemMessage(`Ronde ${this.round}`);
-      drawer = [...this.players.values()].find((p) => p.socketId);
+      drawer = [...this.players.values()].find((p) => p.conn);
       if (!drawer) return this.endGame();
     }
     this.drawnThisRound.add(drawer.id);
@@ -306,9 +354,8 @@ export class Room {
     this.broadcastState();
   }
 
-  handleChoose(socket: GameSocket, index: unknown): void {
-    const player = this.playerForSocket(socket);
-    if (!player || this.phase !== "choosing" || this.turn?.drawerId !== player.id) return;
+  private handleChoose(player: Player, index: unknown): void {
+    if (this.phase !== "choosing" || this.turn?.drawerId !== player.id) return;
     if (typeof index !== "number" || !Number.isInteger(index) || !this.turn.choices[index]) return;
     this.chooseWord(index);
   }
@@ -358,10 +405,8 @@ export class Room {
       this.nextTurn();
       return;
     }
-    {
-      const prefix = reason === "allGuessed" ? "Iedereen heeft het geraden! " : reason === "timeUp" ? "De tijd is om! " : "";
-      this.systemMessage(`${prefix}Het woord was: ${turn.word}`);
-    }
+    const prefix = reason === "allGuessed" ? "Iedereen heeft het geraden! " : reason === "timeUp" ? "De tijd is om! " : "";
+    this.systemMessage(`${prefix}Het woord was: ${turn.word}`);
     this.setPhase("turnEnd", this.options.turnEndMs, () => this.nextTurn());
     this.broadcastState();
   }
@@ -403,7 +448,7 @@ export class Room {
   private everyoneGuessed(): boolean {
     const turn = this.turn;
     if (!turn) return false;
-    const guessers = [...this.players.values()].filter((p) => p.id !== turn.drawerId && p.socketId);
+    const guessers = [...this.players.values()].filter((p) => p.id !== turn.drawerId && p.conn);
     return guessers.length > 0 && guessers.every((p) => turn.guessed.has(p.id));
   }
 
@@ -411,11 +456,12 @@ export class Room {
   // Chat & guessing
   // =========================================================================
 
-  handleChat(socket: GameSocket, text: string): void {
-    const player = this.playerForSocket(socket);
-    if (!player) return;
+  private handleChat(player: Player, raw: unknown): void {
+    if (typeof raw !== "string") return;
+    const text = raw.replace(/\s+/g, " ").trim().slice(0, MAX_CHAT_LENGTH);
+    if (!text) return;
     const turn = this.turn;
-    const message: ChatMessage = { id: randomUUID(), kind: "chat", playerId: player.id, name: player.name, text };
+    const message: ChatMessage = { id: randomId(), kind: "chat", playerId: player.id, name: player.name, text };
 
     if (this.phase !== "drawing" || !turn?.word) {
       this.broadcastChat(message);
@@ -437,7 +483,7 @@ export class Room {
 
     this.broadcastChat(message);
     if (answer.length >= 4 && levenshtein(guess, answer) === 1) {
-      this.sendTo(player, { id: randomUUID(), kind: "close", text: `"${text}" is bijna goed!` });
+      this.sendChat(player, { id: randomId(), kind: "close", text: `"${text}" is bijna goed!` });
     }
   }
 
@@ -454,31 +500,31 @@ export class Room {
       turn.points.set(drawer.id, (turn.points.get(drawer.id) ?? 0) + bonus);
     }
 
-    this.broadcastChat({ id: randomUUID(), kind: "correct", text: `${player.name} heeft het woord geraden!` });
-    this.sendTo(player, { id: randomUUID(), kind: "close", text: `Goed zo! Het woord is "${turn.word}" (+${points})` });
+    this.broadcastChat({ id: randomId(), kind: "correct", text: `${player.name} heeft het woord geraden!` });
+    this.sendChat(player, { id: randomId(), kind: "close", text: `Goed zo! Het woord is "${turn.word}" (+${points})` });
 
     if (this.everyoneGuessed()) this.endTurn("allGuessed");
     else this.broadcastState();
   }
 
-  broadcastChat(message: ChatMessage): void {
-    this.io.to(this.code).emit("chat:message", message);
+  private broadcastChat(message: ChatMessage): void {
+    this.broadcast({ type: "chat", message });
   }
 
-  private sendTo(player: Player, message: ChatMessage): void {
-    if (player.socketId) this.io.to(player.socketId).emit("chat:message", message);
+  private sendChat(player: Player, message: ChatMessage): void {
+    this.sendTo(player, { type: "chat", message });
   }
 
   private sendToKnowers(message: ChatMessage): void {
     const turn = this.turn;
     if (!turn) return;
     for (const p of this.players.values()) {
-      if (p.id === turn.drawerId || turn.guessed.has(p.id)) this.sendTo(p, message);
+      if (p.id === turn.drawerId || turn.guessed.has(p.id)) this.sendChat(p, message);
     }
   }
 
-  systemMessage(text: string): void {
-    this.broadcastChat({ id: randomUUID(), kind: "system", text });
+  private systemMessage(text: string): void {
+    this.broadcastChat({ id: randomId(), kind: "system", text });
   }
 
   // =========================================================================
@@ -491,45 +537,49 @@ export class Room {
     return this.phase === "drawing" && this.turn?.drawerId === player.id;
   }
 
-  handleDrawBegin(socket: GameSocket, raw: unknown): void {
-    const player = this.playerForSocket(socket);
-    if (!player || !this.canDraw(player)) return;
+  private handleDrawBegin(player: Player, raw: unknown): void {
+    if (!this.canDraw(player)) return;
     const stroke = parseStroke(raw);
     if (!stroke || !this.drawing.begin(player.id, stroke)) return;
-    socket.to(this.code).emit("draw:begin", stroke);
+    this.broadcast({ type: "draw:begin", stroke }, player);
   }
 
-  handleDrawPoints(socket: GameSocket, raw: unknown): void {
-    const player = this.playerForSocket(socket);
-    if (!player || !this.canDraw(player) || !raw || typeof raw !== "object") return;
-    const { id, points: rawPoints } = raw as { id?: unknown; points?: unknown };
-    if (typeof id !== "string") return;
-    const points: Point[] | null = parsePoints(rawPoints);
+  private handleDrawPoints(player: Player, id: unknown, rawPoints: unknown): void {
+    if (!this.canDraw(player) || typeof id !== "string") return;
+    const points = parsePoints(rawPoints);
     if (!points || points.length === 0 || !this.drawing.append(player.id, id, points)) return;
-    socket.to(this.code).emit("draw:points", { id, points });
+    this.broadcast({ type: "draw:points", id, points }, player);
   }
 
-  handleUndo(socket: GameSocket): void {
-    const player = this.playerForSocket(socket);
-    if (!player || !this.canDraw(player)) return;
+  private handleUndo(player: Player): void {
+    if (!this.canDraw(player)) return;
     const id = this.drawing.undo(player.id);
-    if (id) this.io.to(this.code).emit("draw:remove", id);
+    if (id) this.broadcast({ type: "draw:remove", id });
   }
 
-  handleClear(socket: GameSocket): void {
-    const player = this.playerForSocket(socket);
-    if (!player || !this.canDraw(player)) return;
+  private handleClear(player: Player): void {
+    if (!this.canDraw(player)) return;
     this.clearDrawing();
   }
 
-  clearDrawing(): void {
+  private clearDrawing(): void {
     this.drawing.clear();
-    this.io.to(this.code).emit("draw:clear");
+    this.broadcast({ type: "draw:clear" });
   }
 
   // =========================================================================
-  // State
+  // Sending
   // =========================================================================
+
+  private sendTo(player: Player, message: ServerMessage): void {
+    player.conn?.send(JSON.stringify(message));
+  }
+
+  /** Send to every connected player, optionally skipping one. */
+  private broadcast(message: ServerMessage, except?: Player): void {
+    const data = JSON.stringify(message);
+    for (const p of this.players.values()) if (p !== except) p.conn?.send(data);
+  }
 
   private playerInfo(p: Player): PlayerInfo {
     const turn = this.turn;
@@ -537,7 +587,7 @@ export class Room {
       id: p.id,
       name: p.name,
       score: p.score,
-      connected: p.socketId !== null,
+      connected: p.conn !== null,
       isHost: p.id === this.hostId,
       isDrawing: turn?.drawerId === p.id && this.phase !== "gameEnd",
       hasGuessed: turn?.guessed.has(p.id) ?? false,
@@ -568,9 +618,8 @@ export class Room {
     };
   }
 
-  broadcastState(): void {
-    for (const p of this.players.values()) {
-      if (p.socketId) this.io.to(p.socketId).emit("room:state", this.stateFor(p));
-    }
+  /** Every player gets their own copy, so secrets (the word) never leak. */
+  private broadcastState(): void {
+    for (const p of this.players.values()) this.sendTo(p, { type: "state", state: this.stateFor(p) });
   }
 }

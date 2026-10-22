@@ -1,5 +1,5 @@
 export * from "./constants";
 export * from "./types";
-export * from "./events";
+export * from "./protocol";
 export * from "./utils";
 export * from "./drawing";

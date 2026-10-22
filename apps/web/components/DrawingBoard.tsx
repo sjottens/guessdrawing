@@ -9,8 +9,8 @@ import { Toolbar } from "./Toolbar";
 export function DrawingBoard({ canDraw, overlay }: { canDraw: boolean; overlay?: React.ReactNode }) {
   const [brush, setBrush] = useState<Brush>({ tool: "pen", color: COLORS[0], size: BRUSH_SIZES[1] });
 
-  const undo = () => getGameClient().socket.emit("draw:undo");
-  const clear = () => getGameClient().socket.emit("draw:clear");
+  const undo = () => getGameClient().send({ type: "draw:undo" });
+  const clear = () => getGameClient().send({ type: "draw:clear" });
 
   // Ctrl/Cmd+Z for undo on desktop.
   useEffect(() => {

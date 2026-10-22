@@ -1,5 +1,5 @@
-import { randomInt } from "node:crypto";
-import words from "./data/words.nl.json" with { type: "json" };
+import words from "../data/words.nl.json";
+import { randomInt } from "./random.js";
 
 export const WORDS: readonly string[] = words;
 
