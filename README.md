@@ -2,9 +2,9 @@
 
 Een tekenspel zoals skribbl.io: één speler tekent, de rest raadt via de chat.
 
-- **Web** (`apps/web`): Next.js (App Router), React, TypeScript, Tailwind CSS
-- **Server** (`apps/server`): Node + TypeScript + Socket.IO — de server is de baas over alle spellogica
-- **Gedeeld** (`packages/shared`): types voor socket-events, constanten en helpers
+- **Web** (`apps/web`): Next.js (App Router), React, TypeScript, Tailwind CSS — draait op Vercel
+- **Server** (`apps/server`): Cloudflare Worker met Durable Objects (één per kamer), via WebSockets — de server is de baas over alle spellogica. Draait op het gratis Cloudflare-plan
+- **Gedeeld** (`packages/shared`): types voor het WebSocket-protocol, constanten en helpers
 
 ## Spelregels
 
@@ -28,92 +28,104 @@ pnpm dev
 Dit start beide apps tegelijk:
 
 - web: http://localhost:3000
-- server: http://localhost:4000 (health check op `/health`)
+- server: http://localhost:8787 (lokale Cloudflare-runtime via `wrangler dev`, health check op `/health`)
 
 Open de site in twee browservensters (of een normaal + incognito venster) om met jezelf te spelen. Elk tabblad is een aparte speler.
 
-**Testen op je telefoon:** open `http://<ip-van-je-computer>:3000`. Zonder `NEXT_PUBLIC_SERVER_URL` verbindt de web-app met poort 4000 op dezelfde host. Next.js kan in dev-modus verzoeken vanaf een ander adres blokkeren; voeg dan je IP toe aan `allowedDevOrigins` in `apps/web/next.config.ts`.
+**Testen op je telefoon:** open `http://<ip-van-je-computer>:3000`. Zonder `NEXT_PUBLIC_SERVER_URL` verbindt de web-app met poort 8787 op dezelfde host. Next.js kan in dev-modus verzoeken vanaf een ander adres blokkeren; voeg dan je IP toe aan `allowedDevOrigins` in `apps/web/next.config.ts`.
 
 ### Overige commando's
 
 ```bash
-pnpm test        # server-tests (rooms, tekenen, spelverloop)
-pnpm typecheck   # TypeScript-check van alle packages
-pnpm build       # productie-build van web en server
+pnpm test           # tests van de spellogica (kamers, tekenen, spelverloop, reconnect)
+pnpm typecheck      # TypeScript-check van alle packages
+pnpm build          # productie-build van de web-app
+pnpm deploy:server  # server naar Cloudflare deployen (na `wrangler login`)
 ```
 
-### Omgevingsvariabelen
+### Instellingen
 
 | App | Variabele | Standaard | Uitleg |
 | --- | --- | --- | --- |
-| web | `NEXT_PUBLIC_SERVER_URL` | `http(s)://<host>:4000` | URL van de Socket.IO-server |
-| server | `PORT` | `4000` | Poort waarop de server luistert |
-| server | `CORS_ORIGIN` | `*` | Toegestane origin(s), kommagescheiden, bv. `https://krabbel.vercel.app` |
+| web | `NEXT_PUBLIC_SERVER_URL` | `http(s)://<host>:8787` | URL van de Cloudflare Worker |
+| server | `CORS_ORIGIN` (in `wrangler.jsonc`) | leeg = alles toegestaan | Toegestane origin(s), kommagescheiden, bv. `https://guessdrawing.vercel.app` |
 
 ## Deployen
 
-De web-app en de server worden los gedeployd: de web-app op Vercel, de server op Railway of Fly.io (Vercel ondersteunt geen langlevende WebSocket-verbindingen).
+De web-app gaat naar Vercel, de server naar Cloudflare. Beide zijn gratis voor normaal gebruik.
 
-> De spelstatus staat in het geheugen van de server. Draai daarom precies **één** server-instantie. Bij een herstart van de server vervallen lopende spellen.
+### 1. Server op Cloudflare (gratis)
 
-### 1. Server op Fly.io
+Maak een gratis account op [cloudflare.com](https://dash.cloudflare.com/sign-up). Daarna kan het op twee manieren.
 
-De `fly.toml` in de root gebruikt `apps/server/Dockerfile`.
+**Via het dashboard (geen terminal nodig)**
+
+1. Ga naar *Workers & Pages → Create → Import a repository* en kies deze GitHub-repo.
+2. Vul in:
+   - *Project name*: `krabbel-server` (moet gelijk zijn aan `name` in `apps/server/wrangler.jsonc`)
+   - *Root directory*: leeg laten (de repo-root, daar staat `pnpm-lock.yaml`)
+   - *Build command*: leeg laten
+   - *Deploy command*: `pnpm run deploy:server`
+3. Deploy. Je server staat daarna op `https://krabbel-server.<jouw-subdomein>.workers.dev`. Elke push naar `main` deployt opnieuw.
+
+**Via de terminal**
 
 ```bash
-fly launch --no-deploy --copy-config   # kies een unieke app-naam
-fly secrets set CORS_ORIGIN=https://jouw-app.vercel.app
-fly deploy
+pnpm install
+pnpm --filter @guessdrawing/server exec wrangler login
+pnpm deploy:server
 ```
 
-De server draait dan op `https://<app-naam>.fly.dev`.
-
-### 1. (alternatief) Server op Railway
-
-1. Maak een nieuw project → *Deploy from GitHub repo* en kies deze repo.
-2. Railway leest `railway.json` en bouwt met `apps/server/Dockerfile`. Laat de *Root Directory* leeg (de Dockerfile heeft de hele monorepo nodig).
-3. Zet de variabele `CORS_ORIGIN=https://jouw-app.vercel.app`. `PORT` zet Railway zelf.
-4. Onder *Settings → Networking* maak je een publiek domein aan, bv. `https://krabbel-server.up.railway.app`.
+Controleer of het werkt: `https://krabbel-server.<jouw-subdomein>.workers.dev/health` geeft `{"ok":true}`.
 
 ### 2. Web-app op Vercel
 
 1. *Add New → Project* en importeer deze repo.
 2. Zet **Root Directory** op `apps/web`. Vercel herkent Next.js en pnpm automatisch (laat *Include files outside of the Root Directory* aan staan, dat is nodig voor `packages/shared`).
-3. Voeg de omgevingsvariabele `NEXT_PUBLIC_SERVER_URL` toe met de URL van je server (bv. `https://krabbel-server.fly.dev`).
-4. Deploy. Zet daarna de Vercel-URL in `CORS_ORIGIN` van de server.
+3. Voeg de omgevingsvariabele `NEXT_PUBLIC_SERVER_URL` toe met de URL van je Worker (zonder `/` aan het eind).
+4. Deploy. Pas je de variabele later aan, deploy dan opnieuw: hij wordt bij het bouwen ingebakken.
+
+### Gratis limieten
+
+Het gratis Cloudflare-plan geeft per dag 100.000 verzoeken (WebSocket-berichten tellen mee) en een beperkte hoeveelheid rekentijd voor Durable Objects. Een kamer kost alleen rekentijd zolang er spelers verbonden zijn. Voor een groep vrienden is dat ruim voldoende; de client bundelt tekenpunten per 60 ms om het aantal berichten laag te houden. Kijk in het Cloudflare-dashboard bij *Workers & Pages → krabbel-server → Metrics* hoeveel je gebruikt.
+
+> Een kamer leeft in het geheugen van zijn Durable Object. Na een nieuwe deploy van de server vervallen lopende spellen.
 
 ## Hoe het werkt
 
 ### Server is de baas
 
-De server houdt per kamer alle staat bij: spelers, fase (`lobby → choosing → drawing → turnEnd → … → gameEnd`), timers, het woord, punten en de tekening. Elke speler krijgt een **eigen** versie van de staat (`room:state`), zodat het woord alleen naar de tekenaar en naar spelers die het al geraden hebben gaat. Alle invoer van clients wordt gecontroleerd (wie mag tekenen, geldige kleuren/diktes, limieten op het aantal punten).
+Elke kamercode hoort bij één Durable Object: een klein, los servertje bij Cloudflare dat alle WebSockets van die kamer afhandelt. De spellogica (`apps/server/src/game/room.ts`) weet niets van Cloudflare; hij praat via een simpele `send`/`close`-interface, zodat de tests gewoon in Node draaien.
+
+De server houdt per kamer alle staat bij: spelers, fase (`lobby → choosing → drawing → turnEnd → … → gameEnd`), timers, het woord, punten en de tekening. Elke speler krijgt een **eigen** versie van de staat (`state`-bericht), zodat het woord alleen naar de tekenaar en naar spelers die het al geraden hebben gaat. Alle invoer van clients wordt gecontroleerd (wie mag tekenen, geldige kleuren/diktes, limieten op het aantal punten).
 
 ### Tekenen
 
 - Streken worden verstuurd als **genormaliseerde coördinaten (0–1)** op een canvas met vaste verhouding 4:3, dus een tekening ziet er op elk scherm hetzelfde uit. De lijndikte is een fractie van de canvasbreedte.
-- Pointer events werken voor muis, pen en touch; punten worden per ~35 ms gebundeld verzonden (`draw:begin`, `draw:points`).
+- Pointer events werken voor muis, pen en touch; punten worden gebundeld verzonden (`draw:begin`, `draw:points`), per ~60 ms.
 - Undo verwijdert je laatste streek, wissen maakt het canvas leeg; de server stuurt dit naar iedereen.
 - Wie later binnenkomt (of opnieuw verbindt) krijgt de volledige tekening via `draw:sync`.
 
 ### Reconnect
 
-Elk tabblad heeft een geheim sessietoken (in `sessionStorage`). Valt de verbinding weg, dan houdt de server je plek 30 seconden vast; Socket.IO verbindt automatisch opnieuw en de client joint dan met hetzelfde token, inclusief score en tekening. Ook een pagina-refresh houdt je plek vast. Is de tekenaar langer dan 10 seconden weg, dan wordt de beurt overgeslagen. Gaat de host weg, dan wordt iemand anders host.
+Elk tabblad heeft een geheim sessietoken (in `sessionStorage`). Valt de verbinding weg, dan houdt de server je plek 30 seconden vast. De client verbindt automatisch opnieuw (ook meteen als je terugkomt naar een tabblad op je telefoon) en joint dan met hetzelfde token, inclusief score en tekening. Client en server sturen elkaar elke 10 seconden een teken van leven, zodat een weggevallen telefoon snel opgemerkt wordt. Ook een pagina-refresh houdt je plek vast. Is de tekenaar langer dan 10 seconden weg, dan wordt de beurt overgeslagen. Gaat de host weg, dan wordt iemand anders host.
 
 ### Projectstructuur
 
 ```
 apps/
-  server/src/
-    server.ts        Socket.IO-setup en event-routing
-    room.ts          Kamer + spellogica (fases, timers, raden, punten)
-    drawing.ts       Validatie en opslag van streken
-    words.ts         Woordkeuze en hints
-    data/words.nl.json   Nederlandse woordenlijst
+  server/
+    wrangler.jsonc   Cloudflare-configuratie (Worker + Durable Object)
+    src/index.ts     Worker: routes (POST /rooms, WebSocket) + Durable Object per kamer
+    src/game/room.ts     Kamer + spellogica (fases, timers, raden, punten)
+    src/game/drawing.ts  Validatie en opslag van streken
+    src/game/words.ts    Woordkeuze en hints
+    src/data/words.nl.json   Nederlandse woordenlijst
   web/
     app/             Next.js-pagina's (start, /room/[code])
     components/      Canvas, toolbar, chat, spelerslijst, overlays
     lib/             Socket-client/store, tekening-store, rendering
-packages/shared/src/ Gedeelde types, events en constanten
+packages/shared/src/ Gedeelde types, protocol en constanten
 ```
 
 Woorden toevoegen? Pas `apps/server/src/data/words.nl.json` aan.
