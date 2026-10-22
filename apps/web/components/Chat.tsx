@@ -6,6 +6,9 @@ import { MAX_CHAT_LENGTH, type ChatMessage } from "@guessdrawing/shared";
 const kindStyles: Record<string, string> = {
   chat: "text-slate-800",
   system: "text-indigo-500 italic",
+  correct: "font-bold text-emerald-600",
+  close: "font-semibold text-amber-600",
+  secret: "text-emerald-700 bg-emerald-50 -mx-1 px-1 rounded",
 };
 
 export function Chat({

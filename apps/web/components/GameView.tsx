@@ -6,7 +6,9 @@ import { Chat } from "./Chat";
 import { DrawingBoard } from "./DrawingBoard";
 import { Lobby } from "./Lobby";
 import { Logo } from "./Logo";
+import { Scoreboard, TurnEnd, WordChoice } from "./Overlays";
 import { PlayerList } from "./PlayerList";
+import { TurnHeader } from "./TurnHeader";
 
 export function GameView({
   snapshot,
@@ -17,6 +19,22 @@ export function GameView({
   room: RoomState;
   onLeave: () => void;
 }) {
+  const isDrawer = room.drawerId === room.you;
+  const me = room.players.find((p) => p.id === room.you);
+  const canDraw = room.phase === "lobby" || (room.phase === "drawing" && isDrawer);
+
+  let overlay: React.ReactNode = null;
+  if (room.phase === "choosing") overlay = <WordChoice room={room} />;
+  else if (room.phase === "turnEnd") overlay = <TurnEnd room={room} />;
+  else if (room.phase === "gameEnd") overlay = <Scoreboard room={room} />;
+
+  let placeholder = "Zeg hallo…";
+  if (room.phase === "drawing") {
+    if (isDrawer) placeholder = "Alleen wie het weet ziet dit…";
+    else if (me?.hasGuessed) placeholder = "Chat met wie het al weet…";
+    else placeholder = "Typ je gok hier…";
+  }
+
   return (
     <main className="mx-auto flex min-h-dvh max-w-6xl flex-col gap-3 p-2 sm:p-4">
       <header className="flex items-center justify-between gap-2">
@@ -39,16 +57,16 @@ export function GameView({
 
       <div className="grid flex-1 grid-cols-1 gap-3 lg:grid-cols-[220px_1fr_280px]">
         <section className="card order-1 self-start overflow-hidden lg:order-2">
-          <Lobby room={room} />
+          {room.phase === "lobby" ? <Lobby room={room} /> : room.phase !== "gameEnd" && <TurnHeader room={room} />}
           <div className="p-2">
-            <DrawingBoard canDraw />
+            <DrawingBoard canDraw={canDraw} overlay={overlay} />
           </div>
         </section>
         <aside className="order-3 lg:order-1">
           <PlayerList room={room} />
         </aside>
-        <aside className="order-2 h-72 lg:order-3 lg:h-auto">
-          <Chat messages={snapshot.messages} onSend={(t) => getGameClient().sendChat(t)} placeholder="Zeg hallo…" />
+        <aside className="order-2 h-64 lg:order-3 lg:h-auto lg:max-h-[calc(100dvh-6rem)]">
+          <Chat messages={snapshot.messages} onSend={(t) => getGameClient().sendChat(t)} placeholder={placeholder} />
         </aside>
       </div>
     </main>

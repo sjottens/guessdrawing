@@ -30,8 +30,8 @@ export function DrawingBoard({ canDraw, overlay }: { canDraw: boolean; overlay?:
       <div className="relative">
         <DrawingCanvas canDraw={canDraw} brush={brush} />
         {overlay && (
-          <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-indigo-950/60 p-3 backdrop-blur-[2px]">
-            {overlay}
+          <div className="absolute inset-0 flex overflow-y-auto rounded-xl bg-indigo-950/70 p-3 backdrop-blur-[2px]">
+            <div className="m-auto flex w-full justify-center">{overlay}</div>
           </div>
         )}
       </div>

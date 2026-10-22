@@ -1,11 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import type { RoomState } from "@guessdrawing/shared";
+import { MIN_PLAYERS_TO_START, type RoomState } from "@guessdrawing/shared";
+import { getGameClient } from "@/lib/game-client";
 
 /** Compact bar shown above the canvas while waiting for players. */
 export function Lobby({ room }: { room: RoomState }) {
   const [copied, setCopied] = useState(false);
+  const isHost = room.hostId === room.you;
+  const connected = room.players.filter((p) => p.connected).length;
+  const canStart = connected >= MIN_PLAYERS_TO_START;
 
   async function share() {
     const link = `${window.location.origin}/room/${room.code}`;
@@ -31,9 +35,23 @@ export function Lobby({ room }: { room: RoomState }) {
           wat!
         </p>
       </div>
-      <button className="btn-secondary py-2 text-sm" onClick={share}>
-        {copied ? "Gekopieerd ✓" : "Link delen"}
-      </button>
+      <div className="flex items-center gap-2">
+        <button className="btn-secondary py-2 text-sm" onClick={share}>
+          {copied ? "Gekopieerd ✓" : "Link delen"}
+        </button>
+        {isHost ? (
+          <button
+            className="btn-primary py-2 text-sm"
+            disabled={!canStart}
+            title={canStart ? undefined : "Je hebt minstens 2 spelers nodig"}
+            onClick={() => getGameClient().socket.emit("game:start")}
+          >
+            Start spel
+          </button>
+        ) : (
+          <span className="text-sm font-semibold text-slate-400">Host start het spel</span>
+        )}
+      </div>
     </div>
   );
 }
