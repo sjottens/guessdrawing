@@ -25,6 +25,13 @@ export interface ClientToServerEvents {
   "room:leave": () => void;
   "chat:send": (text: string) => void;
 
+  /** Host only. */
+  "game:start": () => void;
+  /** Drawer picks one of the offered words (by index). */
+  "game:choose": (index: number) => void;
+  /** Host only: back to the lobby after the game ended. */
+  "game:reset": () => void;
+
   /** Start a new stroke (may already contain the first points). */
   "draw:begin": (stroke: Stroke) => void;
   /** Append points to a stroke started with draw:begin. */
