@@ -3,11 +3,15 @@ import {
   CONNECTION_TIMEOUT_MS,
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
+  isLang,
   isValidRoomCode,
   normalizeRoomCode,
+  type CreateRoomRequest,
   type CreateRoomResponse,
+  type Lang,
 } from "@guessdrawing/shared";
-import { Room, errorMessage, type Connection } from "./game/room.js";
+import { Room, defaultRoomOptions, errorMessage, type Connection } from "./game/room.js";
+import { WORDS_BY_LANG } from "./game/words.js";
 import { randomInt } from "./game/random.js";
 
 export interface Env {
@@ -40,10 +44,12 @@ export default {
 
     // POST /rooms -> create a room with a fresh code
     if (url.pathname === "/rooms" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as CreateRoomRequest | null;
+      const lang: Lang = isLang(body?.lang) ? body.lang : "nl";
       for (let attempt = 0; attempt < 5; attempt++) {
         const code = Array.from({ length: ROOM_CODE_LENGTH }, () => ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)]).join("");
         const stub = env.ROOMS.get(env.ROOMS.idFromName(code));
-        if (await stub.init()) {
+        if (await stub.init(lang)) {
           return Response.json({ code } satisfies CreateRoomResponse, { headers: cors });
         }
       }
@@ -102,9 +108,10 @@ export class GameRoom extends DurableObject<Env> {
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Marks the room as created. Returns false if the code is already taken. */
-  async init(): Promise<boolean> {
+  async init(lang: Lang = "nl"): Promise<boolean> {
     if (await this.isCreated()) return false;
     await this.ctx.storage.put("created", Date.now());
+    await this.ctx.storage.put("lang", lang);
     this.created = true;
     await this.ctx.storage.setAlarm(Date.now() + UNUSED_ROOM_TTL_MS);
     return true;
@@ -139,10 +146,14 @@ export class GameRoom extends DurableObject<Env> {
 
     const url = new URL(request.url);
     const code = normalizeRoomCode(decodeURIComponent(url.pathname.split("/")[2] ?? ""));
-    this.room ??= new Room(code, undefined, () => {
-      // Last player left: forget the room so the code stops working.
-      void this.forget();
-    });
+    if (!this.room) {
+      const stored = await this.ctx.storage.get("lang");
+      const lang: Lang = isLang(stored) ? stored : "nl";
+      this.room = new Room(code, { ...defaultRoomOptions, lang, words: WORDS_BY_LANG[lang] }, () => {
+        // Last player left: forget the room so the code stops working.
+        void this.forget();
+      });
+    }
     const room = this.room;
 
     const conn: Connection = {

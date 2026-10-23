@@ -1,7 +1,12 @@
-import words from "../data/words.nl.json";
+import type { Lang } from "@guessdrawing/shared";
+import wordsEn from "../data/words.en.json";
+import wordsNl from "../data/words.nl.json";
 import { randomInt } from "./random.js";
 
-export const WORDS: readonly string[] = words;
+export const WORDS_BY_LANG: Record<Lang, readonly string[]> = { nl: wordsNl, en: wordsEn };
+
+/** Dutch words, the default. */
+export const WORDS: readonly string[] = wordsNl;
 
 /** Picks `count` distinct random words, avoiding `exclude` when possible. */
 export function pickWords(count: number, exclude: ReadonlySet<string> = new Set(), list = WORDS): string[] {

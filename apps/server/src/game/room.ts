@@ -12,9 +12,12 @@ import {
   levenshtein,
   normalizeGuess,
   sanitizeName,
+  type ChatKey,
   type ChatMessage,
+  type ChatParams,
   type ErrorCode,
   type GamePhase,
+  type Lang,
   type PlayerId,
   type PlayerInfo,
   type RoomCode,
@@ -53,6 +56,8 @@ export interface RoomOptions {
   turnEndMs: number;
   drawerAwayMs: number;
   words: readonly string[];
+  /** Language of `words`; defaults to Dutch. */
+  lang?: Lang;
 }
 
 export const defaultRoomOptions: RoomOptions = {
@@ -148,7 +153,7 @@ export class Room {
       existing.name = name;
       this.connections.set(conn, existing.id);
       this.sendTo(existing, { type: "draw:sync", strokes: this.drawing.snapshot() });
-      if (wasDisconnected) this.systemMessage(`${existing.name} is terug`);
+      if (wasDisconnected) this.systemMessage(`${existing.name} is terug`, "back", { name: existing.name });
       if (this.turn?.drawerId === existing.id && this.drawerAwayTimer) {
         clearTimeout(this.drawerAwayTimer);
         this.drawerAwayTimer = null;
@@ -164,7 +169,7 @@ export class Room {
     this.connections.set(conn, player.id);
     if (!this.hostId) this.hostId = player.id;
     this.sendTo(player, { type: "draw:sync", strokes: this.drawing.snapshot() });
-    this.systemMessage(`${player.name} doet mee`);
+    this.systemMessage(`${player.name} doet mee`, "joined", { name: player.name });
     this.broadcastState();
     return true;
   }
@@ -193,7 +198,7 @@ export class Room {
     if (this.phase !== "choosing" && this.phase !== "drawing") return;
     this.drawerAwayTimer = setTimeout(() => {
       this.drawerAwayTimer = null;
-      this.systemMessage(`${drawer.name} is weg, de beurt wordt overgeslagen`);
+      this.systemMessage(`${drawer.name} is weg, de beurt wordt overgeslagen`, "drawerAway", { name: drawer.name });
       this.endTurn("drawerLeft");
     }, this.options.drawerAwayMs);
   }
@@ -226,16 +231,16 @@ export class Room {
       this.onEmpty(this);
       return;
     }
-    this.systemMessage(`${player.name} heeft de kamer verlaten`);
+    this.systemMessage(`${player.name} heeft de kamer verlaten`, "left", { name: player.name });
     if (this.hostId === id) {
       // Prefer a connected player as the new host.
       const next = [...this.players.values()].find((p) => p.conn) ?? this.players.values().next().value!;
       this.hostId = next.id;
-      this.systemMessage(`${next.name} is nu de host`);
+      this.systemMessage(`${next.name} is nu de host`, "newHost", { name: next.name });
     }
 
     if (this.inGame && this.players.size < MIN_PLAYERS_TO_START) {
-      this.systemMessage("Te weinig spelers over, terug naar de lobby");
+      this.systemMessage("Te weinig spelers over, terug naar de lobby", "tooFew");
       this.toLobby();
       return;
     }
@@ -302,7 +307,7 @@ export class Room {
     this.round = 1;
     this.drawnThisRound.clear();
     this.usedWords.clear();
-    this.systemMessage("Het spel begint! Ronde 1");
+    this.systemMessage("Het spel begint! Ronde 1", "gameStart");
     this.nextTurn();
     return true;
   }
@@ -331,7 +336,7 @@ export class Room {
       this.round++;
       this.drawnThisRound.clear();
       if (this.round > this.options.rounds) return this.endGame();
-      this.systemMessage(`Ronde ${this.round}`);
+      this.systemMessage(`Ronde ${this.round}`, "round", { round: this.round });
       drawer = [...this.players.values()].find((p) => p.conn);
       if (!drawer) return this.endGame();
     }
@@ -350,7 +355,7 @@ export class Room {
     };
     this.clearDrawing();
     this.setPhase("choosing", this.options.chooseMs, () => this.chooseWord(randomInt(choices.length)));
-    this.systemMessage(`${drawer.name} kiest een woord…`);
+    this.systemMessage(`${drawer.name} kiest een woord…`, "choosing", { name: drawer.name });
     this.broadcastState();
   }
 
@@ -372,7 +377,7 @@ export class Room {
     this.scheduleHints(word);
     this.armDrawerAwayTimer();
     const drawer = this.players.get(turn.drawerId);
-    this.systemMessage(`${drawer?.name ?? "De tekenaar"} is aan het tekenen!`);
+    this.systemMessage(`${drawer?.name ?? "De tekenaar"} is aan het tekenen!`, "drawing", { name: drawer?.name ?? "" });
     this.broadcastState();
   }
 
@@ -406,7 +411,7 @@ export class Room {
       return;
     }
     const prefix = reason === "allGuessed" ? "Iedereen heeft het geraden! " : reason === "timeUp" ? "De tijd is om! " : "";
-    this.systemMessage(`${prefix}Het woord was: ${turn.word}`);
+    this.systemMessage(`${prefix}Het woord was: ${turn.word}`, "wordWas", { word: turn.word, reason });
     this.setPhase("turnEnd", this.options.turnEndMs, () => this.nextTurn());
     this.broadcastState();
   }
@@ -419,9 +424,8 @@ export class Room {
     const top = ranking[0];
     if (top) {
       const winners = ranking.filter((p) => p.score === top.score).map((p) => p.name);
-      this.systemMessage(
-        winners.length > 1 ? `Gelijkspel tussen ${winners.join(" en ")}!` : `${top.name} wint met ${top.score} punten!`,
-      );
+      if (winners.length > 1) this.systemMessage(`Gelijkspel tussen ${winners.join(" en ")}!`, "tie", { names: winners });
+      else this.systemMessage(`${top.name} wint met ${top.score} punten!`, "winner", { name: top.name, score: top.score });
     }
     this.broadcastState();
   }
@@ -483,7 +487,7 @@ export class Room {
 
     this.broadcastChat(message);
     if (answer.length >= 4 && levenshtein(guess, answer) === 1) {
-      this.sendChat(player, { id: randomId(), kind: "close", text: `"${text}" is bijna goed!` });
+      this.sendChat(player, { id: randomId(), kind: "close", text: `"${text}" is bijna goed!`, key: "almost", params: { guess: text } });
     }
   }
 
@@ -500,8 +504,14 @@ export class Room {
       turn.points.set(drawer.id, (turn.points.get(drawer.id) ?? 0) + bonus);
     }
 
-    this.broadcastChat({ id: randomId(), kind: "correct", text: `${player.name} heeft het woord geraden!` });
-    this.sendChat(player, { id: randomId(), kind: "close", text: `Goed zo! Het woord is "${turn.word}" (+${points})` });
+    this.broadcastChat({ id: randomId(), kind: "correct", text: `${player.name} heeft het woord geraden!`, key: "guessed", params: { name: player.name } });
+    this.sendChat(player, {
+      id: randomId(),
+      kind: "close",
+      text: `Goed zo! Het woord is "${turn.word}" (+${points})`,
+      key: "youGuessed",
+      params: { word: turn.word ?? "", points },
+    });
 
     if (this.everyoneGuessed()) this.endTurn("allGuessed");
     else this.broadcastState();
@@ -523,8 +533,8 @@ export class Room {
     }
   }
 
-  private systemMessage(text: string): void {
-    this.broadcastChat({ id: randomId(), kind: "system", text });
+  private systemMessage(text: string, key: ChatKey, params: ChatParams = {}): void {
+    this.broadcastChat({ id: randomId(), kind: "system", text, key, params });
   }
 
   // =========================================================================
@@ -615,6 +625,7 @@ export class Room {
       timeLeftMs: this.phaseEndsAt ? Math.max(0, this.phaseEndsAt - Date.now()) : null,
       phaseDurationMs: this.phaseDurationMs,
       turnEndReason: this.phase === "turnEnd" ? (turn?.endReason ?? null) : null,
+      lang: this.options.lang ?? "nl",
     };
   }
 

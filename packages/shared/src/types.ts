@@ -45,7 +45,40 @@ export interface RoomState {
   /** Total length of the current phase, for progress bars. */
   phaseDurationMs: number | null;
   turnEndReason: TurnEndReason | null;
+  /** Language of the words in this room (chosen by whoever created it). */
+  lang: Lang;
 }
+
+export const LANGS = ["nl", "en"] as const;
+export type Lang = (typeof LANGS)[number];
+
+export function isLang(value: unknown): value is Lang {
+  return typeof value === "string" && (LANGS as readonly string[]).includes(value);
+}
+
+/**
+ * Server notices are sent as a key plus params, so every player can read them
+ * in their own language. `text` is a Dutch fallback.
+ */
+export type ChatKey =
+  | "gameStart"
+  | "tooFew"
+  | "joined"
+  | "back"
+  | "left"
+  | "newHost"
+  | "drawerAway"
+  | "round"
+  | "choosing"
+  | "drawing"
+  | "wordWas"
+  | "winner"
+  | "tie"
+  | "almost"
+  | "guessed"
+  | "youGuessed";
+
+export type ChatParams = Record<string, string | number | string[]>;
 
 /**
  * chat: normal message · system: notices · correct: someone guessed it ·
@@ -59,4 +92,6 @@ export interface ChatMessage {
   playerId?: PlayerId;
   name?: string;
   text: string;
+  key?: ChatKey;
+  params?: ChatParams;
 }

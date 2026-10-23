@@ -1,5 +1,5 @@
 import type { Point, Stroke } from "./drawing";
-import type { ChatMessage, RoomState } from "./types";
+import type { ChatMessage, Lang, RoomState } from "./types";
 
 /*
  * Messages over the WebSocket, as JSON. Joining happens when the socket
@@ -39,6 +39,12 @@ export type ServerMessage =
   /** Join failed; the server closes the socket right after. */
   | { type: "error"; error: ErrorCode; message: string }
   | { type: "pong" };
+
+/** Optional JSON body of POST /rooms. */
+export interface CreateRoomRequest {
+  /** Language of the words to draw; defaults to Dutch. */
+  lang?: Lang;
+}
 
 /** Response of POST /rooms. */
 export interface CreateRoomResponse {
