@@ -1,5 +1,6 @@
 const TOKEN_KEY = "gd-session-token";
 const NAME_KEY = "gd-name";
+const TAB_NAME_KEY = "gd-tab-name";
 
 function randomId(): string {
   // crypto.randomUUID only exists on https/localhost; getRandomValues works everywhere.
@@ -25,6 +26,7 @@ export function getSessionToken(): string {
   }
 }
 
+/** Last name used in this browser, shared by all tabs. Only used to prefill the start page. */
 export function getStoredName(): string {
   try {
     return localStorage.getItem(NAME_KEY) ?? "";
@@ -33,9 +35,26 @@ export function getStoredName(): string {
   }
 }
 
+/**
+ * The name this tab plays with (sessionStorage), so a shared link opened in
+ * another tab of the same browser asks for a name instead of reusing the host's.
+ */
+export function getTabName(): string {
+  try {
+    return sessionStorage.getItem(TAB_NAME_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export function storeName(name: string): void {
   try {
     localStorage.setItem(NAME_KEY, name);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.setItem(TAB_NAME_KEY, name);
   } catch {
     /* ignore */
   }

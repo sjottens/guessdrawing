@@ -4,22 +4,26 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { normalizeRoomCode } from "@guessdrawing/shared";
+import { LangSwitch } from "@/components/LangSwitch";
 import { Logo } from "@/components/Logo";
 import { NameForm } from "@/components/NameForm";
 import { GameView } from "@/components/GameView";
-import { getGameClient, useGameClient } from "@/lib/game-client";
-import { getStoredName, storeName } from "@/lib/session";
+import { NebulaScene } from "@/components/NebulaScene";
+import { getGameClient, useGameClient, type Result } from "@/lib/game-client";
+import { useT } from "@/lib/i18n";
+import { getTabName, storeName } from "@/lib/session";
 
 export default function RoomPage() {
   const params = useParams<{ code: string }>();
   const code = normalizeRoomCode(params.code);
   const router = useRouter();
   const snapshot = useGameClient();
+  const { t } = useT();
   const [name, setName] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Extract<Result, { ok: false }> | null>(null);
   const joining = useRef(false);
 
-  useEffect(() => setName(getStoredName()), []);
+  useEffect(() => setName(getTabName()), []);
 
   const inRoom = snapshot.room?.code === code;
 
@@ -29,7 +33,7 @@ export default function RoomPage() {
     void getGameClient()
       .join(code, name)
       .then((res) => {
-        if (!res.ok) setError(res.message);
+        if (!res.ok) setError(res);
       })
       .finally(() => {
         joining.current = false;
@@ -44,10 +48,11 @@ export default function RoomPage() {
   if (error) {
     return (
       <Centered>
-        <div className="card w-full max-w-sm space-y-4 p-6 text-center">
-          <p className="text-lg font-bold text-rose-600">{error}</p>
+        <div className="panel w-full max-w-sm animate-rise space-y-5 p-6 text-center">
+          <p className="eyebrow">{t("room.failed")}</p>
+          <p className="text-xl font-medium tracking-tight text-hot">{t(`error.${error.error}`, error.params)}</p>
           <Link href="/" className="btn-primary w-full">
-            Terug naar start
+            {t("room.backHome")}
           </Link>
         </div>
       </Centered>
@@ -73,7 +78,7 @@ export default function RoomPage() {
   if (!inRoom || !snapshot.room) {
     return (
       <Centered>
-        <p className="animate-pulse font-bold text-white">Verbinden met kamer {code}…</p>
+        <p className="eyebrow animate-pulse">{t("room.connecting", { code })}</p>
       </Centered>
     );
   }
@@ -82,10 +87,19 @@ export default function RoomPage() {
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
+  const { t } = useT();
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 px-4">
-      <Logo />
-      {children}
-    </main>
+    <>
+      <NebulaScene focus="top" />
+      <main className="relative z-10 flex min-h-dvh flex-col items-center px-4 pb-10">
+        <header className="flex w-full max-w-7xl animate-rise items-center justify-between py-5 sm:px-4 sm:py-7">
+          <Link href="/" aria-label={t("room.homeLink")}>
+            <Logo small />
+          </Link>
+          <LangSwitch />
+        </header>
+        <div className="flex w-full flex-1 flex-col items-center justify-start pt-[min(34vh,340px)]">{children}</div>
+      </main>
+    </>
   );
 }

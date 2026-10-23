@@ -6,7 +6,10 @@ import {
   PING_INTERVAL_MS,
   type ChatMessage,
   type ClientMessage,
+  type CreateRoomRequest,
   type CreateRoomResponse,
+  type ErrorCode,
+  type Lang,
   type RoomCode,
   type RoomState,
   type ServerMessage,
@@ -21,7 +24,12 @@ export interface ClientSnapshot {
   messages: ChatMessage[];
 }
 
-export type Result<T = undefined> = { ok: true; data: T } | { ok: false; message: string };
+/** Failures as codes, so the UI can show them in the player's language (see i18n `error.*`). */
+export type ClientError = "createFailed" | "unreachable" | "noRoom" | "noResponse" | "connectFailed" | ErrorCode;
+
+export type Result<T = undefined> =
+  | { ok: true; data: T }
+  | { ok: false; error: ClientError; params?: Record<string, string | number> };
 
 const MAX_MESSAGES = 150;
 const JOIN_TIMEOUT_MS = 8_000;
@@ -84,14 +92,17 @@ class GameClient {
 
   // ---- rooms ----
 
-  async createRoom(): Promise<Result<{ code: RoomCode }>> {
+  /** `lang` picks the language of the words to draw in this room. */
+  async createRoom(lang: Lang): Promise<Result<{ code: RoomCode }>> {
     try {
-      const res = await fetch(`${serverUrl()}/rooms`, { method: "POST" });
-      if (!res.ok) return { ok: false, message: `Kon geen kamer maken (fout ${res.status} van ${serverUrl()})` };
+      // A plain-text body keeps this a "simple" request: no CORS preflight round trip.
+      const body: CreateRoomRequest = { lang };
+      const res = await fetch(`${serverUrl()}/rooms`, { method: "POST", body: JSON.stringify(body) });
+      if (!res.ok) return { ok: false, error: "createFailed", params: { status: res.status, url: serverUrl() } };
       const { code } = (await res.json()) as CreateRoomResponse;
       return { ok: true, data: { code } };
     } catch {
-      return { ok: false, message: "Server is niet bereikbaar" };
+      return { ok: false, error: "unreachable" };
     }
   }
 
@@ -127,7 +138,7 @@ class GameClient {
 
   private open(): Promise<Result> {
     const target = this.target;
-    if (!target) return Promise.resolve({ ok: false, message: "Geen kamer" });
+    if (!target) return Promise.resolve({ ok: false, error: "noRoom" });
     this.closeSocket();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
@@ -141,7 +152,7 @@ class GameClient {
         resolve(r);
       };
       const timeout = setTimeout(() => {
-        settle({ ok: false, message: "Server reageert niet" });
+        settle({ ok: false, error: "noResponse" });
         ws.close();
       }, JOIN_TIMEOUT_MS);
 
@@ -149,7 +160,7 @@ class GameClient {
       try {
         ws = new WebSocket(socketUrl(target.code, target.name));
       } catch {
-        settle({ ok: false, message: "Server is niet bereikbaar" });
+        settle({ ok: false, error: "unreachable" });
         return;
       }
       this.ws = ws;
@@ -174,7 +185,7 @@ class GameClient {
           refused = true;
           this.target = null;
           this.update({ room: null, reconnecting: false });
-          settle({ ok: false, message: msg.message });
+          settle({ ok: false, error: msg.error });
           return;
         }
         if (msg.type === "state") {
@@ -189,7 +200,7 @@ class GameClient {
         if (this.ws !== ws) return;
         this.ws = null;
         this.stopPing();
-        settle({ ok: false, message: "Verbinding mislukt" });
+        settle({ ok: false, error: "connectFailed" });
         if (!refused && this.target && this.joinedTarget) this.scheduleReconnect();
         else if (!this.joinedTarget) this.target = null;
       };

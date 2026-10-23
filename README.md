@@ -1,4 +1,4 @@
-# Krabbel! — realtime multiplayer tekenspel
+# Guessdrawing! — realtime multiplayer tekenspel
 
 Een tekenspel zoals skribbl.io: één speler tekent, de rest raadt via de chat.
 
@@ -128,4 +128,4 @@ packages/shared/src/ Gedeelde types, protocol en constanten
 wrangler.jsonc       Cloudflare-configuratie (Worker + Durable Object)
 ```
 
-Woorden toevoegen? Pas `apps/server/src/data/words.nl.json` aan.
+Woorden toevoegen? Pas `apps/server/src/data/words.nl.json` (Nederlands) of `words.en.json` (Engels) aan. De taal van de woorden volgt de taal van wie de kamer maakt.

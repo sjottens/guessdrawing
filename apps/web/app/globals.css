@@ -1,33 +1,122 @@
 @import "tailwindcss";
 
+/* Fonts come from next/font in layout.tsx as CSS variables. */
+@theme inline {
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
 @theme {
-  --font-sans: ui-rounded, "SF Pro Rounded", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  /* Deep-space palette: near-black, starlight, one electric accent. */
+  --color-bg: #05060a;
+  --color-fg: #eef0f6;
+  --color-accent: #6d8bff;
+  --color-hot: #ff6b3d;
+  --color-mint: #3ee0a1;
+  --color-gold: #ffd166;
+
+  --animate-pop: pop 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  --animate-rise: rise 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-fade: fade 1.8s ease-out both;
+
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+      filter: blur(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+      filter: none;
+    }
+  }
 }
 
-html,
+html {
+  color-scheme: dark;
+}
+
 body {
-  background: #4f46e5;
-  background-image: radial-gradient(circle at 20% 0%, #6366f1 0, transparent 50%),
-    radial-gradient(circle at 100% 100%, #7c3aed 0, transparent 45%);
   min-height: 100dvh;
+  color: var(--color-fg);
+  background-color: var(--color-bg);
+  background-image:
+    radial-gradient(60% 50% at 70% 0%, rgba(109, 139, 255, 0.16), transparent 70%),
+    radial-gradient(50% 40% at 0% 100%, rgba(139, 92, 255, 0.1), transparent 70%);
+  background-attachment: fixed;
 }
 
-@utility card {
-  @apply rounded-2xl bg-white shadow-lg shadow-indigo-950/20;
+/* Fine film grain over everything, for depth. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.06;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+/* Frosted glass panel. */
+@utility panel {
+  @apply rounded-[28px] border border-white/10 bg-white/[0.035] shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_30px_80px_-30px_rgba(0,0,0,0.8)] backdrop-blur-xl;
 }
 
 @utility btn {
-  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-bold transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-full px-5 py-2.5 font-medium tracking-tight transition duration-300 ease-out select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent enabled:active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-35;
 }
 
 @utility btn-primary {
-  @apply btn bg-emerald-500 text-white hover:bg-emerald-600;
+  @apply btn bg-fg text-bg enabled:hover:bg-white enabled:hover:shadow-[0_0_40px_-8px_rgba(238,240,246,0.6)];
+}
+
+@utility btn-accent {
+  @apply btn bg-accent text-white shadow-[0_0_30px_-8px_var(--color-accent)] enabled:hover:shadow-[0_0_44px_-4px_var(--color-accent)] enabled:hover:brightness-110;
 }
 
 @utility btn-secondary {
-  @apply btn bg-indigo-100 text-indigo-900 hover:bg-indigo-200;
+  @apply btn border border-white/15 bg-white/[0.03] text-fg enabled:hover:border-white/30 enabled:hover:bg-white/[0.08];
 }
 
 @utility input {
-  @apply w-full rounded-xl border-2 border-indigo-100 px-3 py-2.5 text-base outline-none focus:border-indigo-400;
+  @apply w-full rounded-2xl border border-white/12 bg-white/[0.04] px-4 py-3 text-base text-fg transition outline-none placeholder:text-fg/30 focus:border-accent/70 focus:bg-white/[0.06] focus:ring-4 focus:ring-accent/15 disabled:opacity-50;
+}
+
+/* Small mono label, e.g. "01 — LOBBY". */
+@utility eyebrow {
+  @apply font-mono text-[11px] font-medium tracking-[0.18em] text-fg/45 uppercase;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

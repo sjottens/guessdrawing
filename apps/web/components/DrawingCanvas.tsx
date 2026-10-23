@@ -145,7 +145,7 @@ export function DrawingCanvas({ canDraw, brush }: { canDraw: boolean; brush: Bru
     <div ref={wrapperRef} className="relative w-full" style={{ aspectRatio: CANVAS_ASPECT }}>
       <canvas
         ref={canvasRef}
-        className={`absolute inset-0 h-full w-full rounded-xl bg-white ${canDraw ? "cursor-crosshair" : ""}`}
+        className={`absolute inset-0 h-full w-full rounded-[20px] bg-white shadow-[0_0_0_1px_rgba(255,255,255,0.08),0_20px_60px_-20px_rgba(109,139,255,0.35)] ${canDraw ? "cursor-crosshair" : ""}`}
         style={{ touchAction: canDraw ? "none" : "auto" }}
       />
     </div>
