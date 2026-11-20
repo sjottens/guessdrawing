@@ -7,3 +7,6 @@ onlyBuiltDependencies:
   - workerd
   - sharp
   - "@tailwindcss/oxide"
+
+# Supply-chain protection: only install versions published at least 3 days ago
+minimumReleaseAge: 4320
